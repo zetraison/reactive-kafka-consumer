@@ -1,48 +1,82 @@
 package com.zetraison.reactivekafkaconsumer.config;
 
-import com.zetraison.reactivekafkaconsumer.dto.UserMessage;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.zetraison.reactivekafkaconsumer.service.KafkaMessageWorker;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.common.serialization.StringDeserializer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.kafka.core.reactive.ReactiveKafkaConsumerTemplate;
+import reactor.kafka.receiver.KafkaReceiver;
 import reactor.kafka.receiver.ReceiverOptions;
+import reactor.kafka.receiver.internals.ConsumerFactory;
+import reactor.kafka.receiver.internals.DefaultKafkaReceiver;
 
-import java.util.Collections;
+import java.time.Duration;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
 
 @Configuration
 @ConditionalOnProperty(prefix = "kafka.consumer", name = "enabled", havingValue = "true")
 public class KafkaConsumerConfig {
-    @Value("${kafka.consumer.topic}")
-    private String topic;
+    @Value(value = "${kafka.bootstrap-servers}")
+    private String bootstrapServers;
+
+    @Value(value = "#{'${kafka.topics}'.split(',')}")
+    private Collection<String> topicNames;
+
+    @Value(value = "${kafka.consumer-group-id}")
+    private String consumerGroupId;
+
+    @Value(value = "${kafka.max-poll-records}")
+    private Integer maxPollRecords;
+
+    @Value(value = "${kafka.max-poll-interval-ms}")
+    private Integer maxPollIntervalMs;
+
+    @Value(value = "${kafka.atmost-once-commit-ahead-size}")
+    private Integer atmostOnceCommitAheadSize;
+
+    @Value(value = "${kafka.commit-batch-size}")
+    private Integer commitBatchSize;
+
+    @Value(value = "${kafka.commit-interval-millis}")
+    private Integer commitIntervalMillis;
+
+    @Value(value = "${kafka.auto-offset-reset}")
+    private String autoOffsetReset;
 
     @Value("${kafka.consumer.worker.threads.count}")
     private int workerThreadsCount;
 
     @Bean
-    public ReceiverOptions<String, UserMessage> kafkaReceiverOptions(
-            KafkaProperties kafkaProperties
-    ) {
-        ReceiverOptions<String, UserMessage> basicReceiverOptions = ReceiverOptions.create(kafkaProperties.buildConsumerProperties());
-        return basicReceiverOptions.subscription(Collections.singletonList(topic));
-    }
+    public KafkaReceiver<String, String> kafkaReceiver() {
+        Map<String, Object> configProps = new HashMap<>();
+        configProps.put(ConsumerConfig.GROUP_ID_CONFIG, consumerGroupId);
+        configProps.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, maxPollRecords);
+        configProps.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, maxPollIntervalMs);
+        configProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        configProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        configProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        configProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, autoOffsetReset);
 
-    @Bean
-    public ReactiveKafkaConsumerTemplate<String, UserMessage> reactiveKafkaConsumerTemplate(
-            ReceiverOptions<String, UserMessage> kafkaReceiverOptions
-    ) {
-        return new ReactiveKafkaConsumerTemplate<>(kafkaReceiverOptions);
+        return new DefaultKafkaReceiver<>(
+                ConsumerFactory.INSTANCE,
+                ReceiverOptions.<String, String>create(configProps)
+                        .atmostOnceCommitAheadSize(atmostOnceCommitAheadSize)
+                        .commitBatchSize(commitBatchSize)
+                        .commitInterval(Duration.ofMillis(commitIntervalMillis))
+                        .subscription(topicNames)
+        );
     }
 
     @Bean
     public KafkaMessageWorker kafkaMessageWorker(
-            ReactiveKafkaConsumerTemplate<String, UserMessage> reactiveKafkaConsumerTemplate
+            KafkaReceiver<String, String> reactiveKafkaReceiver,
+            ObjectMapper objectMapper
     ) {
-        return new KafkaMessageWorker(
-                reactiveKafkaConsumerTemplate,
-                workerThreadsCount
-        );
+        return new KafkaMessageWorker(reactiveKafkaReceiver, workerThreadsCount, objectMapper);
     }
 }
